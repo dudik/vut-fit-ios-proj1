@@ -1,2 +1,3 @@
-# vut-fit-ios-proj1
-VUT FIT Operating Systems Project 1
+# VUT FIT Operating Systems Project 1
+## Obtained points
+15/15
