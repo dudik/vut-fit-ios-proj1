@@ -1,0 +1,134 @@
+#!/bin/sh
+
+POSIXLY_CORRECT=yes
+
+error() {
+    echo "$1"
+    exit 1
+}
+
+processFile() {
+    if [ -f "$1" ]; then
+        wasfile="true"
+
+        if [ "$(echo "$1" | tail -c 4)" = ".gz" ]; then
+            cmd="zcat"
+        else
+            cmd="cat"
+        fi
+
+        lines=$lines$($cmd "$1")"
+"
+    else
+        error "File $1 does not exist"
+    fi
+}
+
+filters() {
+    if [ "$afilter" != "" ] || [ "$bfilter" != "" ]; then
+        if [ "$afilter" != "" ]; then
+            dateinp=$(echo "$afilter" | sed 's/-//g; s/ //g; s/://g;')
+            lines=$(echo "$lines" | awk -v inpdate="$dateinp" '{ split($4, a, ":"); split(a[1], b, "/"); date=sprintf("%04d%02d%02d%02d%02d%02d", b[3], (match("JanFebMarAprMayJunJulAugSepOctNovDec", b[2]) + 2) / 3, substr(b[1], 2), a[2], a[3], a[4]); if (date > inpdate) { print($0); } }')
+        fi
+
+        if [ "$bfilter" != "" ]; then
+            dateinp=$(echo "$bfilter" | sed 's/-//g; s/ //g; s/://g;')
+            lines=$(echo "$lines" | awk -v inpdate="$dateinp" '{ split($4, a, ":"); split(a[1], b, "/"); date=sprintf("%04d%02d%02d%02d%02d%02d", b[3], (match("JanFebMarAprMayJunJulAugSepOctNovDec", b[2]) + 2) / 3, substr(b[1], 2), a[2], a[3], a[4]); if (date < inpdate) { print($0); } }')
+        fi
+    fi
+
+    if [ "$ipfilter" != "" ]; then
+        lines=$(echo "$lines" | awk -v filter="$ipfilter" '{ if ($1 == filter) { print($0) } }')
+    fi
+
+    if [ "$urifilter" != "" ]; then
+        lines=$(echo "$lines" | awk -v pattern="$urifilter" '{ if (match($0, pattern)) { print($0); } }' 2>/dev/null)
+    fi
+}
+
+for last; do true; done
+if [ "$last" = "-a" ] || [ "$last" = "-b" ] || [ "$last" = "-ip" ] || [ "$last" = "-uri" ]; then
+    error "Missing parameter"
+fi
+
+while [ ! "$1" = "" ]; do
+    case "$1" in
+    "-a")
+        if [ "$afilter" != "" ]; then
+            error "After filter already set"
+        fi
+
+        (echo "$2" | grep -Eq ^'[1-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]'$) || error "Incorrect after datetime format"
+        afilter="$2"
+        shift
+        ;;
+    "-b")
+        if [ "$bfilter" != "" ]; then
+            error "Before filter already set"
+        fi
+
+        (echo "$2" | grep -Eq ^'[1-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]'$) || error "Incorrect before datetime format"
+        bfilter="$2"
+        shift
+        ;;
+    "-ip")
+        if [ "$ipfilter" != "" ]; then
+            error "IP filter already set"
+        fi
+
+        (echo "$2" | grep -Eq "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$|^[a-z0-9]+:([a-z0-9]*:)*[a-z0-9]+$") || error "IP address doesn't match IPv4 or IPv6 format"
+        ipfilter="$2"
+        shift
+        ;;
+    "-uri")
+        if [ "$urifilter" != "" ]; then
+            error "URI filter already set"
+        fi
+
+        urifilter="$2"
+        shift
+        ;;
+    "list-ip" | "list-hosts" | "list-uri" | "hist-ip" | "hist-load")
+        if [ "$command" = "" ]; then
+            command="$1"
+        else
+            processFile "$1"
+        fi
+        ;;
+    *)
+        processFile "$1"
+        ;;
+
+    esac
+
+    shift
+done
+
+if [ "$wasfile" = "" ]; then
+    lines=$(cat)
+fi
+
+filters
+
+case "$command" in
+"list-ip")
+    printf "%s" "$lines" | awk '{ print $1; }' | sort | uniq
+    ;;
+"list-hosts")
+    printf "%s" "$lines" | awk '{ print $1; }' | sort | uniq | while read -r address; do
+        host "$address" | awk -v address="$address" 'END{ if ($1 == "Host") { print(address); } else { print($(NF)); } }'
+    done
+    ;;
+"list-uri")
+    printf "%s" "$lines" | awk '{ if ($6 != "\"-\"") { print $7; } };' | sort | uniq
+    ;;
+"hist-ip")
+    printf "%s" "$lines" | awk '{ print $1; }' | sort | uniq -c | sort -r | awk '{ printf("%s (%d): ", $2, $1); for (i = 0; i < $1; i++) { printf("#"); }; printf("\n") }'
+    ;;
+"hist-load")
+    printf "%s" "$lines" | awk '{ split($4, a, ":"); print(substr(a[1], 2)" "a[2]) }' | sort | uniq -c | awk '{ split($2, a, "/"); printf("%04d-%02d-%02d %s:00 (%d): ", a[3], (match("JanFebMarAprMayJunJulAugSepOctNovDec", a[2]) + 2) / 3, a[1], $3, $1); for (i = 0; i < $1; i++) { printf("#"); }; printf("\n") }'
+    ;;
+"")
+    printf "%s" "$lines" | sort
+    ;;
+esac
